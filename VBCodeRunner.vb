@@ -55,7 +55,7 @@ Module VBCodeRunner
 
                 ' Check for valid VB identifier (basic validation)
                 If Not System.Text.RegularExpressions.Regex.IsMatch(kvp.Key, "^[a-zA-Z_][a-zA-Z0-9_]*$") Then
-                    Throw New System.ArgumentException($"Variable name '{kvp.Key}' is not a valid Visual Basic identifier. Variable names must start with a letter or underscore and contain only letters, digits, and underscores.", NameOf(variables))
+                    Throw New System.ArgumentException(System.String.Format("Variable name '{0}' is not a valid Visual Basic identifier. Variable names must start with a letter or underscore and contain only letters, digits, and underscores.", kvp.Key), NameOf(variables))
                 End If
             Next
         End If
@@ -66,7 +66,7 @@ Module VBCodeRunner
 
             If variables IsNot Nothing AndAlso variables.Count > 0 Then
                 For Each kvp As System.Collections.Generic.KeyValuePair(Of System.String, System.Object) In variables
-                    variableDeclarations.AppendLine($"        Dim {kvp.Key} As System.Object = Nothing")
+                    variableDeclarations.AppendLine(System.String.Format("        Dim {0} As System.Object = Nothing", kvp.Key))
                 Next
             End If
 
@@ -75,34 +75,34 @@ Module VBCodeRunner
 
             If variables IsNot Nothing AndAlso variables.Count > 0 Then
                 For Each kvp As System.Collections.Generic.KeyValuePair(Of System.String, System.Object) In variables
-                    variableAssignmentCases.AppendLine($"                    Case ""{kvp.Key}""")
-                    variableAssignmentCases.AppendLine($"                        {kvp.Key} = kvp.Value")
+                    variableAssignmentCases.AppendLine(System.String.Format("                    Case ""{0}""", kvp.Key))
+                    variableAssignmentCases.AppendLine(System.String.Format("                        {0} = kvp.Value", kvp.Key))
                 Next
             End If
 
             ' Create the complete code with proper structure and fully qualified type names
-            Dim completeCode As System.String = $"
+            Dim completeCode As System.String = System.String.Format("
 Public Class DynamicCode
     Public Shared Function Execute(variables As System.Collections.Generic.Dictionary(Of System.String, System.Object)) As System.Object
-{variableDeclarations}
+{0}
 
         ' Assign variables from dictionary
         If variables IsNot Nothing Then
             For Each kvp As System.Collections.Generic.KeyValuePair(Of System.String, System.Object) In variables
                 Select Case kvp.Key
-{variableAssignmentCases}
+{1}
                 End Select
             Next
         End If
 
         ' User code starts here
-        {codeToRun}
+        {2}
         ' User code ends here
 
         Return Nothing
     End Function
 End Class
-"
+", variableDeclarations.ToString(), variableAssignmentCases.ToString(), codeToRun)
 
             ' Parse the code into a syntax tree
             Dim syntaxTree As Microsoft.CodeAnalysis.SyntaxTree = Microsoft.CodeAnalysis.VisualBasic.VisualBasicSyntaxTree.ParseText(completeCode)
@@ -143,7 +143,7 @@ End Class
             End Try
 
             ' Create compilation with unique assembly name
-            Dim assemblyName As System.String = $"DynamicAssembly_{System.Guid.NewGuid().ToString("N")}"
+            Dim assemblyName As System.String = System.String.Concat("DynamicAssembly_", System.Guid.NewGuid().ToString("N"))
             Dim compilation As Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilation = Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilation.Create(
                 assemblyName,
                 New Microsoft.CodeAnalysis.SyntaxTree() {syntaxTree},
@@ -165,9 +165,9 @@ End Class
                     For Each diagnostic As Microsoft.CodeAnalysis.Diagnostic In emitResult.Diagnostics
                         If diagnostic.Severity = Microsoft.CodeAnalysis.DiagnosticSeverity.Error Then
                             errorCount += 1
-                            errorBuilder.AppendLine($"Error {errorCount}: {diagnostic.Id}")
-                            errorBuilder.AppendLine($"  Location: {diagnostic.Location.GetLineSpan()}")
-                            errorBuilder.AppendLine($"  Message: {diagnostic.GetMessage()}")
+                            errorBuilder.AppendLine(System.String.Format("Error {0}: {1}", errorCount, diagnostic.Id))
+                            errorBuilder.AppendLine(System.String.Format("  Location: {0}", diagnostic.Location.GetLineSpan()))
+                            errorBuilder.AppendLine(System.String.Format("  Message: {0}", diagnostic.GetMessage()))
                             errorBuilder.AppendLine()
                         End If
                     Next
@@ -204,9 +204,9 @@ End Class
                 Catch ex As System.Reflection.TargetInvocationException
                     ' Unwrap the inner exception from reflection invocation
                     If ex.InnerException IsNot Nothing Then
-                        Throw New System.InvalidOperationException($"An error occurred while executing the dynamic code: {ex.InnerException.Message}", ex.InnerException)
+                        Throw New System.InvalidOperationException(System.String.Concat("An error occurred while executing the dynamic code: ", ex.InnerException.Message), ex.InnerException)
                     Else
-                        Throw New System.InvalidOperationException($"An error occurred while executing the dynamic code: {ex.Message}", ex)
+                        Throw New System.InvalidOperationException(System.String.Concat("An error occurred while executing the dynamic code: ", ex.Message), ex)
                     End If
                 End Try
             End Using
@@ -222,7 +222,7 @@ End Class
             Throw
         Catch ex As System.Exception
             ' Wrap any other unexpected exceptions
-            Throw New System.InvalidOperationException($"An unexpected error occurred while processing the Visual Basic code: {ex.Message}", ex)
+            Throw New System.InvalidOperationException(System.String.Concat("An unexpected error occurred while processing the Visual Basic code: ", ex.Message), ex)
         End Try
     End Function
 
@@ -293,7 +293,7 @@ System.Console.WriteLine(System.String.Format(""Product = {0}"", product))
             System.Console.WriteLine("All examples completed successfully!")
 
         Catch ex As System.Exception
-            System.Console.WriteLine($"Fatal error in Main: {ex.Message}")
+            System.Console.WriteLine(System.String.Concat("Fatal error in Main: ", ex.Message))
             System.Console.WriteLine(ex.StackTrace)
             System.Environment.Exit(1)
         End Try
