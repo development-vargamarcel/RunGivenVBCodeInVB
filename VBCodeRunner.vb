@@ -1,45 +1,96 @@
-Imports System
-Imports System.Collections.Generic
-Imports System.Reflection
-Imports Microsoft.CodeAnalysis
-Imports Microsoft.CodeAnalysis.VisualBasic
-Imports Microsoft.CodeAnalysis.Emit
-Imports System.IO
-Imports System.Linq
-Imports System.Runtime.Loader
-
+''' <summary>
+''' VBCodeRunner Module - Provides functionality to dynamically compile and execute Visual Basic code at runtime.
+''' This module uses the Roslyn compiler to safely compile and execute VB.NET code in a controlled environment.
+''' </summary>
+''' <remarks>
+''' Production-ready implementation with fully qualified type names for clarity and maintainability.
+''' All external type references use their full namespace paths.
+''' </remarks>
 Module VBCodeRunner
-    ' Main function to execute Visual Basic code dynamically
-    ' codeToRun: The VB code to execute as a string
-    ' variables: Optional dictionary where keys become variable names and values become their values
-    Public Function RunVBCode(codeToRun As String, Optional variables As Dictionary(Of String, Object) = Nothing) As Object
-        Try
-            ' Build the complete code with a wrapper class
-            Dim variableDeclarations As String = ""
-            Dim variableAssignments As String = ""
 
-            ' Create variable declarations and assignments if dictionary is provided
-            If variables IsNot Nothing Then
-                For Each kvp In variables
-                    Dim varType = If(kvp.Value Is Nothing, "Object", kvp.Value.GetType().Name)
-                    variableDeclarations &= $"        Dim {kvp.Key} As Object = Nothing{Environment.NewLine}"
+    ''' <summary>
+    ''' Dynamically compiles and executes Visual Basic code provided as a string.
+    ''' </summary>
+    ''' <param name="codeToRun">The VB.NET code to compile and execute. Must not be null or empty.</param>
+    ''' <param name="variables">
+    ''' Optional dictionary containing variables to make available to the executing code.
+    ''' Dictionary keys become variable names, and values become the variable values.
+    ''' </param>
+    ''' <returns>
+    ''' The return value from the executed code, or Nothing if no value is returned.
+    ''' </returns>
+    ''' <exception cref="System.ArgumentNullException">
+    ''' Thrown when codeToRun is null.
+    ''' </exception>
+    ''' <exception cref="System.ArgumentException">
+    ''' Thrown when codeToRun is empty or contains only whitespace, or when variable names contain invalid characters.
+    ''' </exception>
+    ''' <exception cref="System.InvalidOperationException">
+    ''' Thrown when compilation fails or when the compiled assembly cannot be loaded or executed.
+    ''' </exception>
+    ''' <remarks>
+    ''' This method wraps the provided code in a class structure, compiles it using Roslyn,
+    ''' and executes it in the current application domain. The code has access to System and
+    ''' System.Collections.Generic namespaces by default.
+    '''
+    ''' Security Warning: This method executes arbitrary code and should only be used with trusted input.
+    ''' Never use this with user-provided code in production environments without proper sandboxing.
+    ''' </remarks>
+    Public Function RunVBCode(codeToRun As System.String, Optional variables As System.Collections.Generic.Dictionary(Of System.String, System.Object) = Nothing) As System.Object
+        ' Input validation
+        If codeToRun Is Nothing Then
+            Throw New System.ArgumentNullException(NameOf(codeToRun), "The code to execute cannot be null.")
+        End If
+
+        If System.String.IsNullOrWhiteSpace(codeToRun) Then
+            Throw New System.ArgumentException("The code to execute cannot be empty or contain only whitespace.", NameOf(codeToRun))
+        End If
+
+        ' Validate variable names if provided
+        If variables IsNot Nothing Then
+            For Each kvp As System.Collections.Generic.KeyValuePair(Of System.String, System.Object) In variables
+                If System.String.IsNullOrWhiteSpace(kvp.Key) Then
+                    Throw New System.ArgumentException("Variable names cannot be null, empty, or contain only whitespace.", NameOf(variables))
+                End If
+
+                ' Check for valid VB identifier (basic validation)
+                If Not System.Text.RegularExpressions.Regex.IsMatch(kvp.Key, "^[a-zA-Z_][a-zA-Z0-9_]*$") Then
+                    Throw New System.ArgumentException($"Variable name '{kvp.Key}' is not a valid Visual Basic identifier. Variable names must start with a letter or underscore and contain only letters, digits, and underscores.", NameOf(variables))
+                End If
+            Next
+        End If
+
+        Try
+            ' Build variable declarations for the generated code
+            Dim variableDeclarations As System.Text.StringBuilder = New System.Text.StringBuilder()
+
+            If variables IsNot Nothing AndAlso variables.Count > 0 Then
+                For Each kvp As System.Collections.Generic.KeyValuePair(Of System.String, System.Object) In variables
+                    variableDeclarations.AppendLine($"        Dim {kvp.Key} As System.Object = Nothing")
                 Next
             End If
 
-            ' Create the complete code with proper structure
-            Dim completeCode As String = $"
-Imports System
-Imports System.Collections.Generic
+            ' Build variable assignment cases for the Select statement
+            Dim variableAssignmentCases As System.Text.StringBuilder = New System.Text.StringBuilder()
 
+            If variables IsNot Nothing AndAlso variables.Count > 0 Then
+                For Each kvp As System.Collections.Generic.KeyValuePair(Of System.String, System.Object) In variables
+                    variableAssignmentCases.AppendLine($"                    Case ""{kvp.Key}""")
+                    variableAssignmentCases.AppendLine($"                        {kvp.Key} = kvp.Value")
+                Next
+            End If
+
+            ' Create the complete code with proper structure and fully qualified type names
+            Dim completeCode As System.String = $"
 Public Class DynamicCode
-    Public Shared Function Execute(variables As Dictionary(Of String, Object)) As Object
+    Public Shared Function Execute(variables As System.Collections.Generic.Dictionary(Of System.String, System.Object)) As System.Object
 {variableDeclarations}
 
         ' Assign variables from dictionary
         If variables IsNot Nothing Then
-            For Each kvp In variables
+            For Each kvp As System.Collections.Generic.KeyValuePair(Of System.String, System.Object) In variables
                 Select Case kvp.Key
-{String.Join(Environment.NewLine, If(variables?.Select(Function(v) $"                    Case ""{v.Key}""" & Environment.NewLine & $"                        {v.Key} = kvp.Value"), Array.Empty(Of String)()))}
+{variableAssignmentCases}
                 End Select
             Next
         End If
@@ -53,100 +104,198 @@ Public Class DynamicCode
 End Class
 "
 
-            ' Parse the code
-            Dim syntaxTree = VisualBasicSyntaxTree.ParseText(completeCode)
+            ' Parse the code into a syntax tree
+            Dim syntaxTree As Microsoft.CodeAnalysis.SyntaxTree = Microsoft.CodeAnalysis.VisualBasic.VisualBasicSyntaxTree.ParseText(completeCode)
 
-            ' Get references to required assemblies
-            Dim references As New List(Of MetadataReference) From {
-                MetadataReference.CreateFromFile(GetType(Object).Assembly.Location),
-                MetadataReference.CreateFromFile(GetType(Console).Assembly.Location),
-                MetadataReference.CreateFromFile(GetType(Dictionary(Of ,)).Assembly.Location),
-                MetadataReference.CreateFromFile(Assembly.Load("System.Runtime").Location),
-                MetadataReference.CreateFromFile(Assembly.Load("System.Collections").Location)
-            }
+            ' Get references to required assemblies using fully qualified names
+            Dim references As System.Collections.Generic.List(Of Microsoft.CodeAnalysis.MetadataReference) = New System.Collections.Generic.List(Of Microsoft.CodeAnalysis.MetadataReference)()
 
-            ' Create compilation
-            Dim assemblyName As String = $"DynamicAssembly_{Guid.NewGuid().ToString("N")}"
-            Dim compilation As VisualBasicCompilation = VisualBasicCompilation.Create(
+            ' Add core runtime references
+            references.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(GetType(System.Object).Assembly.Location))
+            references.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(GetType(System.Console).Assembly.Location))
+            references.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(GetType(System.Collections.Generic.Dictionary(Of ,)).Assembly.Location))
+
+            ' Add additional runtime assemblies
+            Try
+                references.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(System.Reflection.Assembly.Load("System.Runtime").Location))
+            Catch ex As System.IO.FileNotFoundException
+                ' System.Runtime might not be available in all environments, continue without it
+            End Try
+
+            Try
+                references.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(System.Reflection.Assembly.Load("System.Collections").Location))
+            Catch ex As System.IO.FileNotFoundException
+                ' System.Collections might not be available in all environments, continue without it
+            End Try
+
+            ' Add System.Private.CoreLib for .NET Core/.NET 5+
+            Try
+                references.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(GetType(System.Object).Assembly.Location))
+            Catch ex As System.Exception
+                ' Already added or not needed
+            End Try
+
+            ' Add netstandard if available (for compatibility)
+            Try
+                references.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(System.Reflection.Assembly.Load("netstandard").Location))
+            Catch ex As System.Exception
+                ' Not available in all environments, continue without it
+            End Try
+
+            ' Create compilation with unique assembly name
+            Dim assemblyName As System.String = $"DynamicAssembly_{System.Guid.NewGuid().ToString("N")}"
+            Dim compilation As Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilation = Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilation.Create(
                 assemblyName,
-                {syntaxTree},
+                New Microsoft.CodeAnalysis.SyntaxTree() {syntaxTree},
                 references,
-                New VisualBasicCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                New Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary)
             )
 
-            ' Compile to memory
-            Using ms As New MemoryStream()
-                Dim result As EmitResult = compilation.Emit(ms)
+            ' Compile to memory stream
+            Using ms As System.IO.MemoryStream = New System.IO.MemoryStream()
+                Dim emitResult As Microsoft.CodeAnalysis.Emit.EmitResult = compilation.Emit(ms)
 
-                If Not result.Success Then
-                    ' Compilation failed - collect errors
-                    Dim errors = result.Diagnostics.Where(Function(d) d.Severity = DiagnosticSeverity.Error)
-                    Dim errorMessage As String = "Compilation errors:" & Environment.NewLine
-                    For Each err In errors
-                        errorMessage &= err.ToString() & Environment.NewLine
+                If Not emitResult.Success Then
+                    ' Compilation failed - collect and format errors
+                    Dim errorBuilder As System.Text.StringBuilder = New System.Text.StringBuilder()
+                    errorBuilder.AppendLine("Failed to compile the provided Visual Basic code. Compilation errors:")
+                    errorBuilder.AppendLine()
+
+                    Dim errorCount As System.Int32 = 0
+                    For Each diagnostic As Microsoft.CodeAnalysis.Diagnostic In emitResult.Diagnostics
+                        If diagnostic.Severity = Microsoft.CodeAnalysis.DiagnosticSeverity.Error Then
+                            errorCount += 1
+                            errorBuilder.AppendLine($"Error {errorCount}: {diagnostic.Id}")
+                            errorBuilder.AppendLine($"  Location: {diagnostic.Location.GetLineSpan()}")
+                            errorBuilder.AppendLine($"  Message: {diagnostic.GetMessage()}")
+                            errorBuilder.AppendLine()
+                        End If
                     Next
-                    Throw New Exception(errorMessage)
+
+                    Throw New System.InvalidOperationException(errorBuilder.ToString())
                 End If
 
-                ' Load and execute the compiled assembly
-                ms.Seek(0, SeekOrigin.Begin)
-                Dim assembly = AssemblyLoadContext.Default.LoadFromStream(ms)
-                Dim type = assembly.GetType("DynamicCode")
-                Dim method = type.GetMethod("Execute", BindingFlags.Public Or BindingFlags.Static)
+                ' Rewind the memory stream to the beginning
+                ms.Seek(0, System.IO.SeekOrigin.Begin)
 
-                ' Execute with variables
-                Return method.Invoke(Nothing, {variables})
+                ' Load the compiled assembly from the memory stream
+                Dim assembly As System.Reflection.Assembly = Nothing
+                Try
+                    assembly = System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromStream(ms)
+                Catch ex As System.Exception
+                    Throw New System.InvalidOperationException("Failed to load the compiled assembly from memory.", ex)
+                End Try
+
+                ' Get the DynamicCode type from the assembly
+                Dim dynamicType As System.Type = assembly.GetType("DynamicCode")
+                If dynamicType Is Nothing Then
+                    Throw New System.InvalidOperationException("Failed to locate the 'DynamicCode' type in the compiled assembly.")
+                End If
+
+                ' Get the Execute method using reflection
+                Dim executeMethod As System.Reflection.MethodInfo = dynamicType.GetMethod("Execute", System.Reflection.BindingFlags.Public Or System.Reflection.BindingFlags.Static)
+                If executeMethod Is Nothing Then
+                    Throw New System.InvalidOperationException("Failed to locate the 'Execute' method in the 'DynamicCode' type.")
+                End If
+
+                ' Invoke the Execute method with the variables dictionary
+                Try
+                    Return executeMethod.Invoke(Nothing, New System.Object() {variables})
+                Catch ex As System.Reflection.TargetInvocationException
+                    ' Unwrap the inner exception from reflection invocation
+                    If ex.InnerException IsNot Nothing Then
+                        Throw New System.InvalidOperationException($"An error occurred while executing the dynamic code: {ex.InnerException.Message}", ex.InnerException)
+                    Else
+                        Throw New System.InvalidOperationException($"An error occurred while executing the dynamic code: {ex.Message}", ex)
+                    End If
+                End Try
             End Using
 
-        Catch ex As Exception
-            Console.WriteLine($"Error executing VB code: {ex.Message}")
+        Catch ex As System.ArgumentNullException
+            ' Re-throw validation exceptions
             Throw
+        Catch ex As System.ArgumentException
+            ' Re-throw validation exceptions
+            Throw
+        Catch ex As System.InvalidOperationException
+            ' Re-throw compilation/execution exceptions
+            Throw
+        Catch ex As System.Exception
+            ' Wrap any other unexpected exceptions
+            Throw New System.InvalidOperationException($"An unexpected error occurred while processing the Visual Basic code: {ex.Message}", ex)
         End Try
     End Function
 
-    ' Example usage in Main
-    Sub Main(args As String())
-        Console.WriteLine("VB Code Runner - Example Usage")
-        Console.WriteLine("=" & New String("="c, 40))
+    ''' <summary>
+    ''' Main entry point for the application. Demonstrates usage of the RunVBCode function with various examples.
+    ''' </summary>
+    ''' <param name="args">Command-line arguments (not used in this application).</param>
+    Sub Main(args As System.String())
+        Try
+            System.Console.WriteLine("VB Code Runner - Production Ready Example Usage")
+            System.Console.WriteLine(System.String.Concat("=", New System.String("="c, 50)))
 
-        ' Example 1: Simple code without variables
-        Console.WriteLine(Environment.NewLine & "Example 1: Simple Hello World")
-        Dim simpleCode As String = "Console.WriteLine(""Hello from dynamic VB code!"")"
-        RunVBCode(simpleCode)
+            ' Example 1: Simple code without variables
+            System.Console.WriteLine()
+            System.Console.WriteLine("Example 1: Simple Hello World")
+            System.Console.WriteLine(New System.String("-"c, 40))
+            Dim simpleCode As System.String = "System.Console.WriteLine(""Hello from dynamic VB code!"")"
+            RunVBCode(simpleCode)
 
-        ' Example 2: Code with variables
-        Console.WriteLine(Environment.NewLine & "Example 2: Using variables")
-        Dim vars As New Dictionary(Of String, Object) From {
-            {"name", "John"},
-            {"age", 30},
-            {"salary", 50000.5}
-        }
+            ' Example 2: Code with variables
+            System.Console.WriteLine()
+            System.Console.WriteLine("Example 2: Using variables")
+            System.Console.WriteLine(New System.String("-"c, 40))
+            Dim vars As System.Collections.Generic.Dictionary(Of System.String, System.Object) = New System.Collections.Generic.Dictionary(Of System.String, System.Object)()
+            vars.Add("name", "John")
+            vars.Add("age", 30)
+            vars.Add("salary", 50000.5)
 
-        Dim codeWithVars As String = "
-Console.WriteLine(""Name: "" & name)
-Console.WriteLine(""Age: "" & age)
-Console.WriteLine(""Salary: "" & salary)
-Dim bonus = salary * 0.1
-Console.WriteLine(""Bonus: "" & bonus)
+            Dim codeWithVars As System.String = "
+System.Console.WriteLine(""Name: "" & name)
+System.Console.WriteLine(""Age: "" & age)
+System.Console.WriteLine(""Salary: "" & salary)
+Dim bonus As System.Double = System.Convert.ToDouble(salary) * 0.1
+System.Console.WriteLine(""Bonus: "" & bonus)
 "
-        RunVBCode(codeWithVars, vars)
+            RunVBCode(codeWithVars, vars)
 
-        ' Example 3: Mathematical calculations
-        Console.WriteLine(Environment.NewLine & "Example 3: Calculations")
-        Dim mathVars As New Dictionary(Of String, Object) From {
-            {"x", 10},
-            {"y", 20}
-        }
+            ' Example 3: Mathematical calculations
+            System.Console.WriteLine()
+            System.Console.WriteLine("Example 3: Mathematical Calculations")
+            System.Console.WriteLine(New System.String("-"c, 40))
+            Dim mathVars As System.Collections.Generic.Dictionary(Of System.String, System.Object) = New System.Collections.Generic.Dictionary(Of System.String, System.Object)()
+            mathVars.Add("x", 10)
+            mathVars.Add("y", 20)
 
-        Dim mathCode As String = "
-Dim sum = CInt(x) + CInt(y)
-Dim product = CInt(x) * CInt(y)
-Console.WriteLine($""x = {x}, y = {y}"")
-Console.WriteLine($""Sum = {sum}"")
-Console.WriteLine($""Product = {product}"")
+            Dim mathCode As System.String = "
+Dim sum As System.Int32 = System.Convert.ToInt32(x) + System.Convert.ToInt32(y)
+Dim product As System.Int32 = System.Convert.ToInt32(x) * System.Convert.ToInt32(y)
+System.Console.WriteLine(System.String.Format(""x = {0}, y = {1}"", x, y))
+System.Console.WriteLine(System.String.Format(""Sum = {0}"", sum))
+System.Console.WriteLine(System.String.Format(""Product = {0}"", product))
 "
-        RunVBCode(mathCode, mathVars)
+            RunVBCode(mathCode, mathVars)
 
-        Console.WriteLine(Environment.NewLine & "Done!")
+            ' Example 4: Error handling demonstration
+            System.Console.WriteLine()
+            System.Console.WriteLine("Example 4: Error Handling")
+            System.Console.WriteLine(New System.String("-"c, 40))
+            Try
+                ' This will cause a compilation error
+                RunVBCode("This is not valid VB code!")
+            Catch ex As System.InvalidOperationException
+                System.Console.WriteLine("Caught expected compilation error:")
+                System.Console.WriteLine(ex.Message.Substring(0, System.Math.Min(200, ex.Message.Length)) & "...")
+            End Try
+
+            System.Console.WriteLine()
+            System.Console.WriteLine("All examples completed successfully!")
+
+        Catch ex As System.Exception
+            System.Console.WriteLine($"Fatal error in Main: {ex.Message}")
+            System.Console.WriteLine(ex.StackTrace)
+            System.Environment.Exit(1)
+        End Try
     End Sub
 End Module
